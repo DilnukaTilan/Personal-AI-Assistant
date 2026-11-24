@@ -1,10 +1,15 @@
 {
   "name": "personal-assistant",
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "hono batch tests/webhook.jsonl tests/app.mjs --compact",
+    "webhook:set": "node --env-file-if-exists=.env scripts/set-webhook.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

@@ -1,0 +1,22 @@
+{"path":"/","expect":{"status":200,"body":"Hello Hono!"}}
+{"path":"/marco","expect":{"status":200,"body":"polo"}}
+{"path":"/__no_such_path__","expect":{"status":404}}
+{"method":"POST","path":"/telegram/webhook","body":{},"expect":{"status":401}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"bad-secret!"},"body":{},"expect":{"status":401}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret","Content-Type":"application/json"},"body":"{broken","expect":{"status":400}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":null,"expect":{"status":400}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":1,"message":{}},"expect":{"status":400}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":2,"callback_query":{}},"expect":{"status":200,"body":{"ok":true}}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":3,"edited_message":{"chat":{"id":42},"message_id":1,"text":"Edited"}},"expect":{"status":200}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":4,"message":{"chat":{"id":42},"message_id":1,"new_chat_members":[]}},"expect":{"status":200}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":5,"message":{"chat":{"id":42},"message_id":2,"poll":{"type":"quiz"}}},"expect":{"status":200}}
+{"path":"/__test/calls","expect":{"status":200,"body":{"count":0}}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":6,"message":{"chat":{"id":42},"message_id":10,"text":"Hello <world> 👋"}},"expect":{"status":200,"body":{"ok":true}}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":7,"message":{"chat":{"id":-10042},"message_id":11,"message_thread_id":7,"photo":[{"file_id":"photo"}],"caption":"A photo"}},"expect":{"status":200,"body":{"ok":true}}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":8,"message":{"chat":{"id":42},"message_id":12,"direct_messages_topic":{"topic_id":9},"voice":{"file_id":"voice"}}},"expect":{"status":200}}
+{"path":"/__test/calls","expect":{"status":200,"body":{"count":3,"calls":[{"chat_id":42,"from_chat_id":42,"message_id":10},{"chat_id":-10042,"from_chat_id":-10042,"message_id":11,"message_thread_id":7},{"chat_id":42,"from_chat_id":42,"message_id":12,"direct_messages_topic_id":9}]}}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":9,"message":{"chat":{"id":42},"message_id":500,"text":"API failure"}},"expect":{"status":502}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":10,"message":{"chat":{"id":42},"message_id":501,"text":"API ok false"}},"expect":{"status":502}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":11,"message":{"chat":{"id":42},"message_id":502,"text":"Network failure"}},"expect":{"status":502}}
+{"method":"POST","path":"/__test/unconfigure","expect":{"status":200}}
+{"method":"POST","path":"/telegram/webhook","headers":{"X-Telegram-Bot-Api-Secret-Token":"test-secret"},"body":{"update_id":12},"expect":{"status":503}}
