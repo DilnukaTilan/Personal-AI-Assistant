@@ -1,14 +1,11 @@
 import { Hono } from 'hono'
+import { generateText } from 'ai'
+import { openai } from '@ai-sdk/openai'
 import { timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { loadEnvFile } from 'node:process'
 
 if (existsSync('.env')) loadEnvFile('.env')
-
-const copyableContent = [
-  'text', 'animation', 'audio', 'contact', 'dice', 'document', 'game',
-  'location', 'photo', 'poll', 'sticker', 'venue', 'video', 'video_note', 'voice',
-]
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -47,7 +44,7 @@ app.post('/telegram/webhook', async (c) => {
     return c.json({ error: 'Invalid Telegram update' }, 400)
   }
 
-  // Only new messages are echoed; edits and other update types are acknowledged.
+  // Only new messages receive replies; edits and other updates are acknowledged.
   if (update.message === undefined) return c.json({ ok: true })
   const message = update.message
   if (!isObject(message) || !isObject(message.chat)
@@ -55,21 +52,39 @@ app.post('/telegram/webhook', async (c) => {
     return c.json({ error: 'Invalid Telegram message' }, 400)
   }
 
-  // Service messages and quiz polls without known answers cannot be copied.
-  if (!copyableContent.some((key) => key in message)
-    || (isObject(message.poll) && message.poll.type === 'quiz'
-      && !('correct_option_ids' in message.poll) && !('correct_option_id' in message.poll))) {
-    return c.json({ ok: true })
+  const prompt = (typeof message.text === 'string' ? message.text
+    : typeof message.caption === 'string' ? message.caption : '').trim()
+  if (!prompt) return c.json({ ok: true })
+
+  if (!process.env.OPENAI_API_KEY) {
+    return c.json({ error: 'AI model is not configured' }, 503)
+  }
+
+  let reply: string
+  try {
+    const { text } = await generateText({
+      model: openai('gpt-5.4-nano'),
+      instructions: 'You are a helpful personal assistant on Telegram. Answer concisely in plain text, under 3500 characters. You can only see the current text or caption, not attachments or previous messages.',
+      prompt,
+      maxOutputTokens: 512,
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(15_000),
+      providerOptions: { openai: { reasoningEffort: 'none' } },
+    })
+    // Telegram accepts at most 4096 characters. Avoid cutting a surrogate pair.
+    reply = Array.from(text.trim()).slice(0, 4096).join('')
+    if (!reply) return c.json({ error: 'AI could not generate a response' }, 502)
+  } catch {
+    return c.json({ error: 'AI could not generate a response' }, 502)
   }
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/copyMessage`, {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: message.chat.id,
-        from_chat_id: message.chat.id,
-        message_id: message.message_id,
+        text: reply,
         ...(Number.isSafeInteger(message.message_thread_id)
           ? { message_thread_id: message.message_thread_id } : {}),
         ...(isObject(message.direct_messages_topic)
@@ -80,11 +95,11 @@ app.post('/telegram/webhook', async (c) => {
     })
     const result: unknown = await response.json()
     if (!response.ok || !isObject(result) || result.ok !== true) {
-      return c.json({ error: 'Telegram could not echo the message' }, 502)
+      return c.json({ error: 'Telegram could not send the response' }, 502)
     }
   } catch {
     // Fetch errors can contain the token-bearing URL. Never expose or log them.
-    return c.json({ error: 'Telegram could not echo the message' }, 502)
+    return c.json({ error: 'Telegram could not send the response' }, 502)
   }
 
   return c.json({ ok: true })
