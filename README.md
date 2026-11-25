@@ -202,6 +202,32 @@ fresh worker. Fake model and Telegram transports prevent model charges and real
 messages. Registration tests verify the cutover payload, URL read-back, and
 credential-safe errors. `@ai-sdk/otel` supplies the AI SDK v7 tracing integration.
 
+## Daytona sandbox smoke test
+
+The project includes `@daytona/sdk` version 2. Its client operations use the
+`daytona.v0` namespace, as described in the
+[TypeScript SDK reference](https://www.daytona.io/docs/en/typescript-sdk/).
+
+Create an API key at [Daytona API keys](https://app.daytona.io/dashboard/keys)
+and set it in your shell or in the existing, Git-ignored `.env` file:
+
+```dotenv
+DAYTONA_API_KEY=your-daytona-api-key
+```
+
+Run from the project root:
+
+```sh
+npm run daytona:smoke
+```
+
+The script creates a TypeScript sandbox, runs `console.log("Hello World")`,
+captures and checks its output and exit code, then deletes the sandbox in a
+`finally` block and waits for deletion. It prints `Daytona smoke test passed.`
+only after execution and deletion both succeed. The sandbox also auto-stops
+after five minutes of inactivity and deletes on stop if the process is interrupted.
+Without an API key, the script exits before creating a sandbox.
+
 ## Documentation
 
 - [Trigger.dev inbound webhooks](https://trigger.dev/docs/webhooks/overview)

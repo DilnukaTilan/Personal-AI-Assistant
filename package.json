@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "daytona:smoke": "node --env-file-if-exists=.env --import tsx scripts/daytona-smoke.ts",
     "dev:trigger": "npx trigger.dev@4.8.10 dev",
     "start": "node dist/index.js",
     "test": "hono batch tests/routes.jsonl tests/trigger-app.mjs --compact -e ai -e @ai-sdk/openai -e @trigger.dev/sdk && hono batch tests/trigger-ai.jsonl tests/trigger-app.mjs --compact -e ai -e @ai-sdk/openai -e @trigger.dev/sdk && node --import tsx --test tests/*.test.mjs",
@@ -17,6 +18,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^4.0.123",
     "@ai-sdk/otel": "^1.0.181",
+    "@daytona/sdk": "^2.2.0",
     "@hono/node-server": "^2.1.3",
     "@trigger.dev/sdk": "4.8.10",
     "ai": "^7.0.181",
