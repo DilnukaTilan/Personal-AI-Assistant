@@ -9,15 +9,16 @@ The flow is:
 
 ```text
 Telegram -> Trigger.dev endpoint `telegram` -> conversation session
-         -> chat.agent -> AI SDK/OpenAI -> Telegram sendMessage
+         -> chat.agent -> AI SDK/OpenAI + web/sandbox tools
+         -> Telegram sendMessage / sendDocument
 ```
 
 `src/trigger/telegram.ts` declares the endpoint, channel, and agent.
 `src/telegram.ts` validates messages and sends formatted replies using
 `src/telegram-format.ts`, the reusable Markdown-to-Telegram HTML formatter.
 The agent uses the existing `gpt-5.4-nano` model, with reasoning disabled,
-1200 output tokens per step, no model retries, and a 180-second turn timeout.
-Research has at most eight model steps, with the last reserved for an answer.
+3000 output tokens per step, no model retries, and a 210-second turn timeout.
+Each turn has at most sixteen model steps, with the last reserved for an answer.
 It uses the managed `streamText` supplied by Trigger.dev.
 
 ## Live web and structured data
@@ -146,9 +147,11 @@ answers. The source uses `update_id` for ingress deduplication, and the channel
 keeps turns sequential within a session. `max_connections: 1` also reduces
 concurrent deliveries during registration.
 
-New message text and media captions become prompts. Edits, callbacks,
+New message text and media captions become prompts. Document, photo, audio, voice,
+video, animation, video-note, and sticker uploads are accepted even without captions.
+Edits, callbacks,
 non-text updates, whitespace-only messages, bot-authored messages, and malformed
-messages do not call the model. Attachments themselves are not processed.
+messages do not call the model. Attachment processing is described below.
 Replies preserve forum/private threads and direct-message topics, and long
 answers are split into messages of at most 4096 visible UTF-16 code units without
 breaking surrogate pairs, HTML entities, or tags. Replies use `parse_mode: "HTML"`.
@@ -201,6 +204,109 @@ The tests use Hono CLI for HTTP behavior and Trigger.dev's offline
 fresh worker. Fake model and Telegram transports prevent model charges and real
 messages. Registration tests verify the cutover payload, URL read-back, and
 credential-safe errors. `@ai-sdk/otel` supplies the AI SDK v7 tracing integration.
+
+## Uploaded files and Daytona computer tools
+
+The Telegram webhook already subscribes to `message`, which includes uploads;
+there is no new URL, signing secret, or Telegram registration to configure.
+The channel filter now admits file-only messages. `src/telegram-files.ts` stores
+attachment references in the conversation transcript. The model receives their
+names and attachment IDs, while Telegram file IDs stay in data parts. Upload
+references survive a fresh worker and remain scoped to the existing chat/topic
+session. Group participants in the same topic share that conversation and its files.
+
+`src/daytona.ts` adds five AI SDK tools alongside the existing web tools:
+
+- `readUploadedFile` downloads a referenced upload through Telegram `getFile`,
+  imports it into a fresh sandbox, and returns bounded text or an image preview.
+  Built-in parsers support PDF, DOCX, XLSX, UTF-8 text (including CSV/JSON/HTML/code),
+  and common image formats. Scanned PDFs return a first-page image preview;
+  audio/video and other formats are imported without claiming to transcribe/parse them.
+- `runSandboxCommand` executes code inside that sandbox for analysis, conversion,
+  and artifact generation. It prepares document libraries before execution and
+  automatically reimports files referenced by known input paths, or the latest
+  upload by default. `attachmentIds` explicitly selects up to five inputs totaling
+  40 MB; `[]` selects none. Working directory: `/home/daytona/workspace`.
+- `watermarkPdf` restores a PDF and prepares its libraries in the current turn,
+  adds a diagonal text watermark to every page (1–200 pages), and verifies the
+  saved PDF's page count and watermark text. It returns a verified path for
+  `sendSandboxFile`. Follow-ups such as “Watermark only” use this tool directly.
+- `computer` starts the sandbox desktop and provides screenshots, mouse clicks,
+  movement/dragging/scrolling, typing, and hotkeys. Screenshot results reach the
+  model as images through `toModelOutput`, including when history is restored.
+- `sendSandboxFile` downloads a completed file and uploads it with multipart
+  `sendDocument` to the bound Telegram chat/topic. Only an acknowledged upload
+  returns `delivered: true`. Ambiguous deliveries are never automatically retried.
+
+Set **`DAYTONA_API_KEY`** in local `.env` and in every Trigger.dev worker environment
+where these tools should run, including **Production before deployment**. A local
+key does not configure hosted workers. `DAYTONA_SNAPSHOT` is optional; leave it
+unset to use Daytona's default desktop-capable snapshot. Custom snapshots must
+include Python, pip and [Daytona's desktop packages](https://www.daytona.io/docs/en/computer-use/).
+Document dependencies are pinned and installed before a read, command, or watermark:
+PyMuPDF (`import fitz`), reportlab, PyPDF2, python-docx, openpyxl, and Pillow.
+A prebuilt snapshot can reduce cold-start time. Neither bot/API keys nor worker
+environment variables are passed to the sandbox.
+
+Each turn gets its own lazy sandbox, created only if a tool needs it. Commands and
+desktop actions are serialized. Trigger's turn-completion hook attempts deletion
+on success, error, or stop and waits for confirmation. Auto-stop after five idle
+minutes, delete-on-stop, and a fifteen-minute wall-clock TTL bound leftovers if a
+worker dies. Editing tools reimport attachments automatically on the next turn;
+temporary sandbox output paths
+are not persistent download links. A sandbox failure does not disable plain text
+conversation or web research. An already-started SDK operation can finish after
+cancellation; cleanup waits for in-flight operations.
+
+Input downloads are limited to **20 MB**, and return files to **50 MB**, matching
+the [hosted Telegram Bot API](https://core.telegram.org/bots/api#sending-files).
+File size is enforced while streaming, even without a Content-Length header.
+PDF reads cover at most five pages per call; XLSX previews cover five sheets,
+200 rows and 30 columns; extracted text is capped at 30,000 characters and image
+previews at 450 KB. Encrypted, damaged, unsupported, and partially extracted files
+produce explicit limitations. Uploaded contents and screen text are untrusted data;
+they cannot authorize unrelated tool calls. Code and macros inside uploads are not
+executed by the parsers. Generated sample signatures must be clearly fictional and
+must not be represented as legally signed agreements.
+
+Offline tests exercise file-only ingress, attachment provenance, bounded downloads,
+token-safe failures, multipart egress with topic routing, sandbox isolation/cleanup,
+image model output, and a full Trigger channel tool round trip. They do not send
+real Telegram messages or spend model/sandbox credits:
+
+```sh
+npm test
+npm run typecheck
+npm run build
+```
+
+The opt-in live test uses real Daytona with synthetic upload fixtures and a captured
+Telegram return-file transport. It checks TXT/PDF/DOCX/XLSX/image parsing, PDF edits,
+file transfers, desktop controls, and sandbox deletion, without sending to a real chat:
+
+```sh
+npm run daytona:files-smoke
+```
+
+This test includes a second sandbox that restores the original PDF and creates a
+verified watermark after the upload turn's sandbox has been deleted. To also
+check the real OpenAI model's decision on “Watermark only” with an earlier
+missing-library failure in synthetic history, run:
+
+```sh
+npm run daytona:watermark-smoke
+```
+
+The model check spends OpenAI and Daytona credits, uses a synthetic PDF, and
+captures return-file bytes without sending to an actual Telegram chat. Tool schemas
+are safe to resolve before Trigger's `onBoot` during transcript restoration;
+only the live turn's bundle is retained for cleanup after locals are initialized.
+
+Deploy the worker after adding its environment variables, then upload a PDF with a
+caption such as “Summarize this PDF and return a text file,” upload a document
+without a caption, and request a generated PDF. Verify both text and document
+delivery in the same topic. Local and synthetic tests do not prove the Production
+worker's credentials or the actual Telegram upload path are configured.
 
 ## Daytona sandbox smoke test
 

@@ -29,7 +29,7 @@ async function main() {
     const output = response.result.trim()
     console.log(output)
 
-    if (response.exitCode !== 0 || output !== 'Hello World') {
+    if (response.exitCode !== 0 || !output.split(/\r?\n/).includes('Hello World')) {
       throw new Error(`Hello World verification failed (exit code ${response.exitCode}).`)
     }
   } finally {

@@ -228,7 +228,7 @@ test('Telegram agent researches a natural request, consumes tool results, and re
     const step = prompts.length
     prompts.push(options.prompt)
     assert.deepEqual(options.tools.map((entry) => entry.name).sort(),
-      ['inspectDataTool', 'queryDataTool', 'readWebPage', 'webSearch'])
+      ['computer', 'inspectDataTool', 'queryDataTool', 'readUploadedFile', 'readWebPage', 'runSandboxCommand', 'sendSandboxFile', 'watermarkPdf', 'webSearch'])
     assert.match(JSON.stringify(options.prompt), /Customers do not know the names Firecrawl or Alexandria/)
     assert.match(JSON.stringify(options.prompt), /Current date and time \(UTC\)/)
     let chunks

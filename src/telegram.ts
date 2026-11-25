@@ -8,7 +8,17 @@ export type TelegramMessage = {
   caption?: string
   message_thread_id?: number
   direct_messages_topic?: { topic_id: number }
+  document?: TelegramFile
+  photo?: TelegramFile[]
+  audio?: TelegramFile
+  voice?: TelegramFile
+  video?: TelegramFile
+  animation?: TelegramFile
+  video_note?: TelegramFile
+  sticker?: TelegramFile
 }
+
+type TelegramFile = { file_id: string; file_name?: string; mime_type?: string; file_size?: number }
 
 export type TelegramUpdate = {
   update_id: number
