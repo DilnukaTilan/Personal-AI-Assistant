@@ -1,122 +1,165 @@
 # Telegram AI assistant
 
-Deployed on Railway: https://personal-assistant-production-344f73aa.up.railway.app
+Telegram posts directly to a **Trigger.dev hosted inbound webhook**. A custom
+Telegram chat channel routes each message to the `telegram-assistant` chat agent
+and posts the final reply using Telegram's Bot API. Hono no longer handles
+`POST /telegram/webhook`.
 
-Webhook URL: `https://personal-assistant-production-344f73aa.up.railway.app/telegram/webhook`.
-The server binds to `0.0.0.0` and uses Railway's `PORT` environment variable
-(3000 locally). Node.js 24 is selected through `package.json`.
+The flow is:
 
-A Hono Node.js webhook at `POST /telegram/webhook`. It generates a response to
-each new text message or media caption using AI SDK's `generateText` and the
-direct OpenAI provider, then sends the answer to the same chat using Telegram's
-`sendMessage` API. Forum topics and direct message topics are preserved.
-Attachments themselves are not processed, and messages without text or a caption
-are acknowledged without calling the model. Each response uses only the current
-message; no conversation history is stored.
-
-## Setup
-
-Install dependencies with `npm ci`. Set `TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_WEBHOOK_SECRET` and `OPENAI_API_KEY` in the deployment environment or a
-local `.env` file (see `.env.example`). The webhook secret must contain 1–256
-letters, digits, underscores or hyphens. Credentials and Firecrawl research
-output are ignored by Git.
-
-The model is `gpt-5.4-nano`, with reasoning disabled and output capped at 512
-tokens to keep cost and latency low. OpenAI lists standard pricing of $0.20 per
-million input tokens and $1.25 per million output tokens, checked November 25,
-2026. See the [model reference](https://developers.openai.com/api/docs/models/gpt-5.4-nano)
-for current pricing. Replies are plain text and capped at Telegram's 4096
-character limit.
-
-Build with `npm run build`, then run with `npm start`. Expose the server through
-a public HTTPS endpoint, then register the complete webhook URL:
-
-```sh
-npm run webhook:set -- https://your-domain.example/telegram/webhook
+```text
+Telegram -> Trigger.dev endpoint `telegram` -> conversation session
+         -> chat.agent -> AI SDK/OpenAI -> Telegram sendMessage
 ```
 
-Registration sends the secret to Telegram and subscribes to new `message` updates.
-Send a text message to the bot in Telegram to receive an AI response. In groups,
-Telegram's bot privacy settings determine which messages the bot receives.
+`src/trigger/telegram.ts` declares the endpoint, channel, and agent.
+`src/telegram.ts` validates messages and sends bounded plain-text replies.
+The agent uses the existing `gpt-5.4-nano` model, with reasoning disabled,
+512 output tokens, no model retries, and a 30-second generation timeout.
+It uses the managed `streamText` supplied by Trigger.dev.
 
-## Temporary public AI test
+## Conversation memory without a database
 
-`GET /test/ai` needs no authentication and returns a generated greeting as
-`text/plain`. The Hono handler triggers the `test-ai` Trigger.dev task, waits
-for completion, and returns its output. The AI SDK call runs in Trigger.dev,
-using the same OpenAI model as the webhook. Responses include the run ID in
-`X-Trigger-Run-Id` and use `Cache-Control: no-store`.
+The agent deliberately uses Trigger.dev's **default transcript storage**. The
+runtime writes UI messages, internal context state, and resume cursors to its
+object store, and restores them when a fresh worker continues the same session.
+There is no application database or local transcript file to provision.
 
-Set a production `TRIGGER_SECRET_KEY` in Railway and `OPENAI_API_KEY` in the
-Trigger.dev project's Production environment, then deploy the tasks with
-`npx trigger.dev@4.8.10 deploy --env prod`. For local testing, use a development
-key in `.env` and run `npm run dev:trigger` with the OpenAI key configured.
-The fixed prompt, 512-token cap, 15-second generation timeout, and disabled
-task/AI retries keep the test bounded. The handler waits up to 45 seconds for
-run updates; a timed-out request does not cancel the background run.
+A session key includes the endpoint, Telegram chat, forum/private thread, and
+direct-message topic. Different chats and topics have separate histories; group
+participants in the same topic share that topic's conversation. Reuse the same
+endpoint id, channel id, agent id, and routing key across deployments to keep
+addressing those histories. Old conversations from the former stateless Hono
+webhook cannot be recovered retroactively.
 
-```sh
-npx hono request /test/ai src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
-```
+History is available in Trigger.dev's Sessions view. Storage retention and the
+model's context window still apply. Self-hosted Trigger.dev requires an object
+store for default transcript persistence; the hosted platform supplies it.
 
-Once deployed, open `/test/ai` on the server's public HTTPS domain. Each request
-starts a Trigger.dev run that calls OpenAI. Missing Trigger.dev configuration
-returns 503; task failures or empty output return 502; waiting too long returns
-504. Remove the marked route in `src/app.ts` and `src/trigger/test-ai.ts` after
-testing.
+## Setup and Telegram registration
 
-## Background tasks with Trigger.dev
+1. Run `npm ci`. Add the variables from `.env.example` to your existing local
+   `.env` file. The shared `TELEGRAM_WEBHOOK_SECRET` must be 1-256 letters,
+   digits, underscores, or hyphens. You can reuse the existing webhook secret.
+   Keep `.env` out of Git.
+2. In the Trigger.dev project `proj_cyhyvbhxmfhaqgtcuhui`, set
+   `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` in **Production environment
+   variables**. These are worker credentials. The webhook's verification secret
+   is configured separately in step 4.
+3. Enable hosted deployments for the organization, then deploy:
 
-Trigger.dev project: `proj_cyhyvbhxmfhaqgtcuhui`.
-The exported `hello-world` task lives in `src/trigger/hello-world.ts` and accepts
-`{"name":"Tilan"}` (or `{}` for the default greeting).
+   ```sh
+   npx trigger.dev@4.8.10 deploy --env prod
+   ```
 
-Add your development `TRIGGER_SECRET_KEY` to `.env`. If the CLI is not already
-authenticated, run `npx trigger.dev@latest login`, then start the local worker:
+   Verify that the deployment registers the `telegram-assistant` agent and the
+   `telegram` endpoint. The last live deployment attempt in this project was
+   blocked by a Free plan card-verification requirement; resolve any outstanding
+   account setup shown in the Trigger.dev dashboard before deploying.
+4. Open **Webhooks > telegram** in the project's **Production** environment and
+   copy its exact hosted HTTPS URL. Store the same local secret as the endpoint's
+   signing secret (the CLI reads it without printing it):
+
+   ```sh
+   npx trigger.dev@4.8.10 webhooks set-secret telegram --env prod --from-env TELEGRAM_WEBHOOK_SECRET --from-file .env
+   ```
+
+   An endpoint rejects deliveries until its secret is set. When rotating an
+   existing secret, use `--previous-secret-ttl 24h` for an overlap or `0` to stop
+   accepting the old secret immediately. The shared-secret verifier checks
+   `X-Telegram-Bot-Api-Secret-Token`; it does not use an HMAC.
+5. Register the copied URL with Telegram:
+
+   ```sh
+   npm run webhook:set -- "https://<exact-hosted-trigger-endpoint-url>"
+   ```
+
+   This calls Telegram's `setWebhook` with `secret_token` from `.env`,
+   `allowed_updates: ["message"]`, `max_connections: 1`, and
+   `drop_pending_updates: false`. It then calls `getWebhookInfo` to verify the
+   registered URL. This replaces the old Railway URL; no `deleteWebhook` call
+   is needed. Complete this step before deploying the removal of the old Hono
+   handler to Railway to avoid an interruption.
+6. Check the current registration and send two messages to the bot:
+
+   ```sh
+   npm run webhook:info
+   ```
+
+   Verify the URL, pending update count, and any recent delivery error. Send
+   “My name is Tilan”, then “What is my name?” in the same chat/topic. Confirm
+   the delivery, agent run, reply, and saved transcript in Trigger.dev. Repeat
+   after the worker has ended or been restarted to check restored memory.
+
+Use the **Trigger.dev hosted URL**, not the removed Railway
+`/telegram/webhook` path. The registration helper does not provision or verify
+Trigger.dev itself; deploy the agent and set the endpoint secret first.
+Live registration and credential transfers are separate from the local code
+change and are not performed by `npm test` or `npm run build`.
+
+## Delivery behavior
+
+Trigger.dev verifies, stores, and acknowledges each update before the agent
+answers. The source uses `update_id` for ingress deduplication, and the channel
+keeps turns sequential within a session. `max_connections: 1` also reduces
+concurrent deliveries during registration.
+
+New message text and media captions become prompts. Edits, callbacks,
+non-text updates, whitespace-only messages, bot-authored messages, and malformed
+messages do not call the model. Attachments themselves are not processed.
+Replies preserve forum/private threads and direct-message topics, and long
+answers are split into messages of at most 4096 UTF-16 code units without
+breaking surrogate pairs. Replies use plain text, without `parse_mode`.
+
+Turn errors produce a generic Telegram error message. Network failures do not
+expose the bot-token URL. A successful webhook acknowledgement means delivery
+was stored, not that a Telegram reply was sent: monitor failed runs and channel
+egress in Trigger.dev. Sending a reply and persisting its result are not one
+atomic operation; a crash or manual replay can still duplicate a reply. No
+custom exactly-once delivery database is introduced.
+
+## Local development
+
+Use a development `TRIGGER_SECRET_KEY` in `.env`, with worker credentials
+available to the local Trigger.dev worker:
 
 ```sh
 npm run dev:trigger
 ```
 
-Keep the worker running, open the project's Development environment in the
-Trigger.dev dashboard, and use the task's Test page to run `hello-world`.
-The run logs the greeting and returns it with a timestamp. This sample task
-does not require the Telegram or OpenAI credentials.
+Development and Production have different hosted webhook URLs and secrets.
+Use a separate test bot for Development so its registration does not replace
+the production bot's webhook. Default transcript persistence is managed by
+Trigger.dev; restarting only the Node worker does not require a database.
 
-`npm run typecheck` checks both the application and `trigger.config.ts`.
-`npm run build` uses `tsconfig.build.json` to preserve the `dist/index.js`
-entry point used by `npm start`.
+## Hono and the temporary AI test
 
-## Verification without a server
+The Railway Hono app retains `GET /`, `GET /marco`, and the temporary public
+`GET /test/ai` endpoint. The latter still triggers the separate `test-ai` task
+and returns plain text with `X-Trigger-Run-Id`. It requires a matching
+`TRIGGER_SECRET_KEY` in Railway and an OpenAI key in the Trigger.dev worker.
+The Telegram pipeline does not pass through Railway.
 
 ```sh
 npx hono routes src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
 npx hono request / src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
 npm test
+npm run typecheck
 npm run build
 ```
 
-The Hono CLI tests exercise authentication, malformed payloads, text and caption
-generation, topics, ignored updates, output limits, missing configuration, and
-OpenAI/Telegram failures. They run the actual AI SDK with fake outbound OpenAI
-and Telegram transports and test credentials, without incurring model charges
-or sending real messages. The original `/` and `/marco` routes are retained.
-The SDK packages are marked external so the CLI loads their Node.js modules
-directly instead of bundling their CommonJS dependencies into ESM.
+The tests use Hono CLI for HTTP behavior and Trigger.dev's offline
+`mockChatAgent` harness for real channel turns and transcript restoration on a
+fresh worker. Fake model and Telegram transports prevent model charges and real
+messages. Registration tests verify the cutover payload, URL read-back, and
+credential-safe errors. `@ai-sdk/otel` supplies the AI SDK v7 tracing integration.
 
-## Webhook behavior
+## Documentation
 
-The handler checks `X-Telegram-Bot-Api-Secret-Token` before parsing the update.
-See Telegram's [setWebhook](https://core.telegram.org/bots/api#setwebhook) and
-[sendMessage](https://core.telegram.org/bots/api#sendmessage) references.
-
-Valid updates without a new text message or caption receive HTTP 200. Missing
-Telegram configuration returns 503, a missing/wrong secret returns 401,
-malformed updates return 400, and a missing OpenAI key returns 503 for messages
-requiring generation. AI failures or empty output and Telegram API/network
-failures return 502 so delivery can be retried. Generation times out after 15
-seconds with SDK retries disabled; Telegram calls time out after 10 seconds.
-Errors do not expose credentials. This simple bot has no persistent
-deduplication: a redelivery can regenerate a response and produce a duplicate
-reply or additional model charges.
+- [Trigger.dev inbound webhooks](https://trigger.dev/docs/webhooks/overview)
+- [Custom webhook verification](https://trigger.dev/docs/webhooks/custom-providers)
+- [Custom chat channels](https://trigger.dev/docs/webhooks/channels)
+- [Transcript storage](https://trigger.dev/docs/ai-chat/transcript-storage)
+- [Signing secrets and CLI commands](https://trigger.dev/docs/webhooks/signing-secrets)
+- [Telegram setWebhook](https://core.telegram.org/bots/api#setwebhook)
+- [Telegram getWebhookInfo](https://core.telegram.org/bots/api#getwebhookinfo)

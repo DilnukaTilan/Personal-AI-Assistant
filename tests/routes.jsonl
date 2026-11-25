@@ -1,0 +1,4 @@
+{"path":"/","expect":{"status":200,"body":"Hello Hono!"}}
+{"path":"/marco","expect":{"status":200,"body":"polo"}}
+{"path":"/__no_such_path__","expect":{"status":404}}
+{"method":"POST","path":"/telegram/webhook","body":{"update_id":1},"expect":{"status":404}}
