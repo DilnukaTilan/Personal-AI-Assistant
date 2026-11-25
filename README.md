@@ -40,6 +40,28 @@ Registration sends the secret to Telegram and subscribes to new `message` update
 Send a text message to the bot in Telegram to receive an AI response. In groups,
 Telegram's bot privacy settings determine which messages the bot receives.
 
+## Background tasks with Trigger.dev
+
+Trigger.dev project: `proj_cyhyvbhxmfhaqgtcuhui`.
+The exported `hello-world` task lives in `src/trigger/hello-world.ts` and accepts
+`{"name":"Tilan"}` (or `{}` for the default greeting).
+
+Add your development `TRIGGER_SECRET_KEY` to `.env`. If the CLI is not already
+authenticated, run `npx trigger.dev@latest login`, then start the local worker:
+
+```sh
+npm run dev:trigger
+```
+
+Keep the worker running, open the project's Development environment in the
+Trigger.dev dashboard, and use the task's Test page to run `hello-world`.
+The run logs the greeting and returns it with a timestamp. This sample task
+does not require the Telegram or OpenAI credentials.
+
+`npm run typecheck` checks both the application and `trigger.config.ts`.
+`npm run build` uses `tsconfig.build.json` to preserve the `dist/index.js`
+entry point used by `npm start`.
+
 ## Verification without a server
 
 ```sh
