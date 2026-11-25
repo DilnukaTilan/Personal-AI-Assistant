@@ -1,4 +1,5 @@
-{"path":"/","expect":{"status":200,"body":"Hello Hono!"}}
-{"path":"/marco","expect":{"status":200,"body":"polo"}}
+{"path":"/","expect":{"status":404}}
+{"path":"/marco","expect":{"status":404}}
+{"path":"/test/ai","expect":{"status":404}}
 {"path":"/__no_such_path__","expect":{"status":404}}
 {"method":"POST","path":"/telegram/webhook","body":{"update_id":1},"expect":{"status":404}}

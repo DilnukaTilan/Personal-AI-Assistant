@@ -183,17 +183,15 @@ Use a separate test bot for Development so its registration does not replace
 the production bot's webhook. Default transcript persistence is managed by
 Trigger.dev; restarting only the Node worker does not require a database.
 
-## Hono and the temporary AI test
+## Hono router
 
-The Railway Hono app retains `GET /`, `GET /marco`, and the temporary public
-`GET /test/ai` endpoint. The latter still triggers the separate `test-ai` task
-and returns plain text with `X-Trigger-Run-Id`. It requires a matching
-`TRIGGER_SECRET_KEY` in Railway and an OpenAI key in the Trigger.dev worker.
-The Telegram pipeline does not pass through Railway.
+The Railway Hono app currently has no registered API routes. The placeholder
+and temporary AI test endpoints have been removed; requests return 404.
+The Telegram pipeline uses the hosted Trigger.dev endpoint directly.
 
 ```sh
-npx hono routes src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
-npx hono request / src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
+npx hono routes src/app.ts
+npx hono request / src/app.ts
 npm test
 npm run typecheck
 npm run build

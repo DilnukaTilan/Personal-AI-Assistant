@@ -13,7 +13,7 @@
     "daytona:watermark-smoke": "node --env-file-if-exists=.env --import tsx scripts/daytona-watermark-smoke.ts",
     "dev:trigger": "npx trigger.dev@4.8.10 dev",
     "start": "node dist/index.js",
-    "test": "hono batch tests/routes.jsonl tests/trigger-app.mjs --compact -e ai -e @ai-sdk/openai -e @trigger.dev/sdk && hono batch tests/trigger-ai.jsonl tests/trigger-app.mjs --compact -e ai -e @ai-sdk/openai -e @trigger.dev/sdk && node --import tsx --test tests/*.test.mjs",
+    "test": "hono batch tests/routes.jsonl src/app.ts --compact && node --import tsx --test tests/*.test.mjs",
     "webhook:set": "node --env-file-if-exists=.env scripts/set-webhook.mjs",
     "webhook:info": "node --env-file-if-exists=.env scripts/get-webhook.mjs"
   },
