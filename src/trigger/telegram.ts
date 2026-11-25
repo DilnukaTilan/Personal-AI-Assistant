@@ -1,7 +1,9 @@
 import { webhooks } from '@trigger.dev/sdk'
 import { chat } from '@trigger.dev/sdk/ai'
 import { openai } from '@ai-sdk/openai'
-import type { LanguageModel } from 'ai'
+import { isStepCount, type LanguageModel } from 'ai'
+import { createFirecrawlTools } from '../firecrawl.js'
+import { telegramInstructions } from '../telegram-instructions.js'
 import { telegramMessage, telegramText, telegramTarget, sendTelegramReply } from '../telegram.js'
 import type { TelegramUpdate } from '../telegram.js'
 
@@ -50,20 +52,28 @@ export const telegramChannel = chat.channels.custom({
 })
 
 // The model is a server-side dependency; webhook payloads cannot choose it.
-export function createTelegramAgent(model: LanguageModel = openai('gpt-5.4-nano')) {
+export function createTelegramAgent(
+  model: LanguageModel = openai('gpt-5.4-nano'),
+  createTools = createFirecrawlTools,
+) {
   return chat.agent({
     id: 'telegram-assistant',
     channels: [telegramChannel],
     maxDuration: 300,
     idleTimeoutInSeconds: 30,
-    system: 'You are a helpful personal assistant on Telegram. Use the conversation history to remember earlier messages. Answer concisely in plain text, ideally under 3500 characters. You can read message text and media captions, but not attachments.',
+    system: telegramInstructions,
+    tools: () => createTools(),
     // Leave storage unset: Trigger.dev persists transcript snapshots and resume
     // cursors in its object store and restores them when the session boots again.
-    run: async ({ messages, signal, streamText }) => streamText({
+    run: async ({ messages, tools, signal, streamText }) => streamText({
       model,
-      messages,
-      abortSignal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-      maxOutputTokens: 512,
+      messages: [{ role: 'system', content: `Current date and time (UTC): ${new Date().toISOString()}` }, ...messages],
+      tools,
+      stopWhen: isStepCount(8),
+      // Reserve the last step for an answer even if research used its full budget.
+      prepareStep: ({ stepNumber }) => stepNumber >= 7 ? { toolChoice: 'none' } : {},
+      abortSignal: AbortSignal.any([signal, AbortSignal.timeout(180_000)]),
+      maxOutputTokens: 1200,
       maxRetries: 0,
       providerOptions: { openai: { reasoningEffort: 'none' } },
     }),

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { createTelegramAgent, telegramChannel } from '../src/trigger/telegram.ts'
+import { createFirecrawlTools } from '../src/firecrawl.ts'
 import { telegramMessage, telegramText, telegramTarget, splitTelegramText, sendTelegramReply } from '../src/telegram.ts'
 
 const update = (id, text, extra = {}) => ({ update_id: id, message: {
@@ -110,4 +111,71 @@ test('agent restores conversation memory from a transcript on a fresh worker', {
   assert.doesNotMatch(JSON.stringify(prompts[2]), /My name is Tilan/)
   assert.equal(sends[2].text, 'I do not know your name yet.')
   assert.equal(sends[2].chat_id, 99)
+})
+
+test('Telegram agent researches a natural request, consumes tool results, and restores them next turn', { timeout: 20_000 }, async (t) => {
+  mockBotToken(t)
+  const sends = []
+  t.mock.method(globalThis, 'fetch', async (_, options) => {
+    sends.push(JSON.parse(options.body))
+    return Response.json({ ok: true, result: { message_id: sends.length } })
+  })
+  const prompts = []
+  const calls = []
+  const client = {
+    search: async (query, options) => {
+      calls.push({ query, options })
+      return { tools: [{ provider: 'example', capability: 'tables/search', description: 'Find tables',
+        options: [{ name: 'city', type: 'string', required: true }], response: { key: 'tables' } }] }
+    },
+    scrape: async (request) => {
+      calls.push(request)
+      return { scrapeId: 'scrape-test', requestId: 'request-test', creditsCost: 1, alexandria: [
+        { provider: 'example', capability: 'tables/search', creditsCost: 1,
+          data: { tables: [{ name: 'Test Cafe', time: '19:00', url: 'https://example.com/book' }] } },
+      ] }
+    },
+  }
+  const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 10, text: 10, reasoning: 0 } }
+  const model = new MockLanguageModelV4({ doStream: async (options) => {
+    const step = prompts.length
+    prompts.push(options.prompt)
+    assert.deepEqual(options.tools.map((entry) => entry.name).sort(),
+      ['inspectDataTool', 'queryDataTool', 'readWebPage', 'webSearch'])
+    assert.match(JSON.stringify(options.prompt), /Customers do not know the names Firecrawl or Alexandria/)
+    assert.match(JSON.stringify(options.prompt), /Current date and time \(UTC\)/)
+    let chunks
+    if (step < 2) {
+      const toolName = step === 0 ? 'webSearch' : 'queryDataTool'
+      const input = step === 0 ? { query: 'restaurant tables Colombo tonight for two', mode: 'dataTools', limit: 3 }
+        : { provider: 'example', capability: 'tables/search', optionsJson: '{"city":"Colombo"}' }
+      chunks = [{ type: 'tool-call', toolCallId: `lookup-${step}`, toolName, input: JSON.stringify(input) },
+        { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool-calls' }, usage }]
+    } else {
+      assert.match(JSON.stringify(options.prompt), /Test Cafe/)
+      chunks = [{ type: 'text-start', id: 'reply' },
+        { type: 'text-delta', id: 'reply', delta: 'Test Cafe has a table at 19:00: https://example.com/book' },
+        { type: 'text-end', id: 'reply' },
+        { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage }]
+    }
+    return { stream: simulateReadableStream({ chunks, initialDelayInMs: 0, chunkDelayInMs: 0 }) }
+  } })
+  const agent = createTelegramAgent(model, () => createFirecrawlTools(() => client))
+  const first = mockChatAgent(agent, { chatId: 'telegram-research-test' })
+  try {
+    await first.sendChannelEvent({ connectorId: 'telegram-chat', deliveryId: 'research-1',
+      event: update(10, 'Find a restaurant table in Colombo tonight for two.') })
+  } finally { await first.close() }
+  assert.equal(prompts.length, 3, 'the model must continue after both tool results')
+  assert.equal(calls.length, 2)
+  assert.match(sends[0].text, /Test Cafe.*https:\/\/example.com\/book/)
+  const resumed = mockChatAgent(agent, { chatId: 'telegram-research-test', mode: 'continuation', snapshot: first.getSnapshot() })
+  try {
+    await resumed.sendChannelEvent({ connectorId: 'telegram-chat', deliveryId: 'research-2',
+      event: update(11, 'Remind me of the table you found.') })
+  } finally { await resumed.close() }
+  assert.equal(prompts.length, 4)
+  assert.equal(calls.length, 2, 'a conversation follow-up can reuse saved results without another lookup')
+  assert.match(JSON.stringify(prompts[3]), /tables.*Test Cafe/)
 })

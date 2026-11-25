@@ -15,8 +15,49 @@ Telegram -> Trigger.dev endpoint `telegram` -> conversation session
 `src/trigger/telegram.ts` declares the endpoint, channel, and agent.
 `src/telegram.ts` validates messages and sends bounded plain-text replies.
 The agent uses the existing `gpt-5.4-nano` model, with reasoning disabled,
-512 output tokens, no model retries, and a 30-second generation timeout.
+1200 output tokens per step, no model retries, and a 180-second turn timeout.
+Research has at most eight model steps, with the last reserved for an answer.
 It uses the managed `streamText` supplied by Trigger.dev.
+
+## Live web and structured data
+
+The official `firecrawl` Node SDK powers four AI SDK tools, declared on the
+Trigger agent and passed to its managed `streamText`:
+
+- `webSearch`: web/news results plus Alexandria data tool discovery, or data tools only.
+- `readWebPage`: markdown from a supplied/source URL, with fresh fetching when needed.
+- `inspectDataTool`: the selected provider's input/output contract and examples.
+- `queryDataTool`: structured retrieval through Firecrawl's Alexandria scrape API.
+
+`src/telegram-instructions.ts` routes ordinary customer requests to these tools.
+Customers can ask for prices, travel, available tables/classes/campsites, jobs,
+rentals, local businesses, reviews, company research, public ads, creator metrics,
+streaming availability, product comparisons, official records, or other current
+information. They never need to name Firecrawl or Alexandria. The instructions
+cover missing constraints, source URLs, freshness, pagination, partial results,
+fallbacks, and untrusted web content. The current UTC time is supplied each turn;
+the bot asks for the customer's timezone/location when needed.
+
+Data execution requires a full contract discovered/inspected in that turn. Tool
+state is isolated per turn; transcript memory remains managed by Trigger.dev.
+The tools retrieve information and links; they do not book, buy, submit applications,
+accept provider terms, execute code, or create recurring monitors. Provider coverage
+and availability vary. A Firecrawl account may need credits, Alexandria access,
+or provider terms reviewed by an account admin before some datasets can run.
+See the [prompt gallery](https://alexandria.firecrawl.dev/prompts) for example requests.
+
+Set **`FIRECRAWL_API_KEY`** in your local `.env` and in the Trigger.dev environments
+where this agent runs (including Production before deploying). Existing CLI login
+credentials do not automatically configure the worker. No separate Alexandria key
+is used. `FIRECRAWL_API_URL` is optional for a self-hosted API; leave it unset for
+hosted Firecrawl. Without the key, ordinary conversation still works and live
+lookups report that they are unavailable without exposing configuration details.
+
+Searches, page reads, and provider queries are bounded by SDK timeouts and result
+size limits. Stop/cancel ends the agent's wait; the SDK does not expose per-call
+abort signals, so an already-started remote request can finish and consume credits.
+The offline tests use a local HTTP server with the real SDK and a mocked chat
+model; they do not spend Firecrawl/OpenAI credits or send real Telegram messages.
 
 ## Conversation memory without a database
 
@@ -43,7 +84,7 @@ store for default transcript persistence; the hosted platform supplies it.
    digits, underscores, or hyphens. You can reuse the existing webhook secret.
    Keep `.env` out of Git.
 2. In the Trigger.dev project `proj_cyhyvbhxmfhaqgtcuhui`, set
-   `TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY` in **Production environment
+   `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and `FIRECRAWL_API_KEY` in **Production environment
    variables**. These are worker credentials. The webhook's verification secret
    is configured separately in step 4.
 3. Enable hosted deployments for the organization, then deploy:
