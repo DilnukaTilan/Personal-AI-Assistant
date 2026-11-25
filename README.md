@@ -13,7 +13,8 @@ Telegram -> Trigger.dev endpoint `telegram` -> conversation session
 ```
 
 `src/trigger/telegram.ts` declares the endpoint, channel, and agent.
-`src/telegram.ts` validates messages and sends bounded plain-text replies.
+`src/telegram.ts` validates messages and sends formatted replies using
+`src/telegram-format.ts`, the reusable Markdown-to-Telegram HTML formatter.
 The agent uses the existing `gpt-5.4-nano` model, with reasoning disabled,
 1200 output tokens per step, no model retries, and a 180-second turn timeout.
 Research has at most eight model steps, with the last reserved for an answer.
@@ -149,8 +150,14 @@ New message text and media captions become prompts. Edits, callbacks,
 non-text updates, whitespace-only messages, bot-authored messages, and malformed
 messages do not call the model. Attachments themselves are not processed.
 Replies preserve forum/private threads and direct-message topics, and long
-answers are split into messages of at most 4096 UTF-16 code units without
-breaking surrogate pairs. Replies use plain text, without `parse_mode`.
+answers are split into messages of at most 4096 visible UTF-16 code units without
+breaking surrogate pairs, HTML entities, or tags. Replies use `parse_mode: "HTML"`.
+Headings become bold text; emphasis, lists, hyperlinks, quotes, and code are preserved.
+Markdown tables become numbered records with a labeled line for each column.
+Raw HTML and special characters are escaped, and unsafe link destinations are omitted.
+Telegram formatting rejections retry only the rejected chunk as readable plain text
+(including link destinations). Parser failures deliver the original text instead.
+Network, rate-limit, and other delivery failures retain the existing generic error behavior.
 
 Turn errors produce a generic Telegram error message. Network failures do not
 expose the bot-token URL. A successful webhook acknowledgement means delivery

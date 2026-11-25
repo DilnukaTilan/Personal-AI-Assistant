@@ -5,6 +5,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { createTelegramAgent, telegramChannel } from '../src/trigger/telegram.ts'
 import { createFirecrawlTools } from '../src/firecrawl.ts'
+import { Lexer } from 'marked'
 import { telegramMessage, telegramText, telegramTarget, splitTelegramText, sendTelegramReply } from '../src/telegram.ts'
 
 const update = (id, text, extra = {}) => ({ update_id: id, message: {
@@ -43,7 +44,7 @@ test('outbound replies are bounded without losing text or exposing provider erro
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://api.telegram.org/bottest-token/sendMessage')
     const payload = JSON.parse(options.body)
-    assert.equal(payload.parse_mode, undefined)
+    assert.equal(payload.parse_mode, 'HTML')
     sent.push(payload)
     return Response.json({ ok: true, result: { message_id: sent.length } })
   })
@@ -55,6 +56,91 @@ test('outbound replies are bounded without losing text or exposing provider erro
   await assert.rejects(sendTelegramReply({ chat_id: 42 }, 'hello'), { message: 'Telegram could not send the response' })
   t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false }, { status: 429 }))
   await assert.rejects(sendTelegramReply({ chat_id: 42 }, 'hello'), { message: 'Telegram could not send the response' })
+})
+
+test('channel sends HTML and retries only the rejected chunk as readable plain text', async (t) => {
+  mockBotToken(t)
+  const sent = []
+  t.mock.method(globalThis, 'fetch', async (_, options) => {
+    const payload = JSON.parse(options.body)
+    sent.push(payload)
+    if (sent.length === 2) return Response.json({ ok: false, error_code: 400,
+      description: "Bad Request: can't parse entities: Unsupported start tag" }, { status: 400 })
+    return Response.json({ ok: true, result: { message_id: sent.length } })
+  })
+  const target = { chat_id: 42, message_thread_id: 8, direct_messages_topic_id: 9 }
+  const result = await telegramChannel.send({ text: '**' + 'a'.repeat(4096) + '**\n\n[Read](https://example.com)' },
+    { handle: target, event: update(1, 'hi') })
+  assert.equal(result.ref, '3')
+  assert.equal(sent.length, 3)
+  assert.equal(sent[0].text, '<b>' + 'a'.repeat(4096) + '</b>')
+  assert.equal(sent[0].parse_mode, 'HTML')
+  assert.match(sent[1].text, /<a href=/)
+  assert.equal(sent[2].text, 'Read (https://example.com)')
+  assert.equal(sent[2].parse_mode, undefined)
+  for (const payload of sent) assert.deepEqual({ chat_id: payload.chat_id,
+    message_thread_id: payload.message_thread_id, direct_messages_topic_id: payload.direct_messages_topic_id }, target)
+})
+
+test('fallback text with long link destinations is independently bounded', async (t) => {
+  mockBotToken(t)
+  const sent = []
+  t.mock.method(globalThis, 'fetch', async (_, options) => {
+    const payload = JSON.parse(options.body)
+    sent.push(payload)
+    return payload.parse_mode ? Response.json({ ok: false, error_code: 400,
+      description: "Bad Request: can't parse entities" }, { status: 400 })
+      : Response.json({ ok: true, result: { message_id: sent.length } })
+  })
+  const url = 'https://example.com/' + 'x'.repeat(5000)
+  assert.equal(await sendTelegramReply({ chat_id: 42 }, `[Read](${url})`), '3')
+  assert.equal(sent.slice(1).map((p) => p.text).join(''), `Read (${url})`)
+  assert.ok(sent.slice(1).every((p) => !p.parse_mode && p.text.length <= 4096))
+})
+
+test('parser failures use original plain text and empty replies send nothing', async (t) => {
+  mockBotToken(t)
+  const sent = []
+  t.mock.method(globalThis, 'fetch', async (_, options) => {
+    sent.push(JSON.parse(options.body))
+    return Response.json({ ok: true, result: { message_id: sent.length } })
+  })
+  assert.equal(await sendTelegramReply({ chat_id: 42 }, '   '), undefined)
+  assert.equal(sent.length, 0)
+  t.mock.method(Lexer, 'lex', () => { throw new Error('parser failure') })
+  const text = '**original** <literal> ' + '👋'.repeat(3000)
+  await sendTelegramReply({ chat_id: 42 }, text)
+  assert.equal(sent.map((p) => p.text).join(''), text)
+  assert.ok(sent.every((p) => !p.parse_mode && p.text.length <= 4096 && p.text.isWellFormed()))
+})
+
+test('non-formatting failures are sanitized and never retried as plain text', async (t) => {
+  mockBotToken(t)
+  for (const response of [
+    () => { throw new Error('private test-token URL') },
+    () => Response.json({ ok: false, error_code: 429, description: 'Too Many Requests' }, { status: 429 }),
+    () => Response.json({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }, { status: 400 }),
+    () => new Response('not json', { status: 502 }),
+    () => Response.json({ ok: true, result: {} }),
+  ]) {
+    let count = 0
+    t.mock.method(globalThis, 'fetch', async () => { count++; return response() })
+    await assert.rejects(sendTelegramReply({ chat_id: 42 }, '**hi**'), { message: 'Telegram could not send the response' })
+    assert.equal(count, 1)
+  }
+})
+
+test('plain-text fallback failure is sanitized without an endless retry', async (t) => {
+  mockBotToken(t)
+  const sent = []
+  t.mock.method(globalThis, 'fetch', async (_, options) => {
+    sent.push(JSON.parse(options.body))
+    return Response.json({ ok: false, error_code: 400,
+      description: "Bad Request: can't parse entities: test-token" }, { status: 400 })
+  })
+  await assert.rejects(sendTelegramReply({ chat_id: 42 }, '**hi**'), { message: 'Telegram could not send the response' })
+  assert.equal(sent.length, 2)
+  assert.equal(sent[1].parse_mode, undefined)
 })
 
 test('agent restores conversation memory from a transcript on a fresh worker', { timeout: 20_000 }, async (t) => {

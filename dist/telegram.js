@@ -1,3 +1,4 @@
+import { formatTelegramReply, TELEGRAM_TEXT_LIMIT } from './telegram-format.js';
 function isObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -35,7 +36,7 @@ export function splitTelegramText(text) {
     const chunks = [];
     let chunk = '';
     for (const character of text.trim()) {
-        if (chunk.length + character.length > 4096) {
+        if (chunk.length + character.length > TELEGRAM_TEXT_LIMIT) {
             chunks.push(chunk);
             chunk = '';
         }
@@ -49,26 +50,48 @@ export async function sendTelegramReply(target, text) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token)
         throw new Error('Telegram bot is not configured');
-    let ref;
-    for (const chunk of splitTelegramText(text)) {
+    try {
+        let chunks;
         try {
+            chunks = formatTelegramReply(text);
+        }
+        catch {
+            // A parser failure must not prevent delivery of the original response.
+            chunks = splitTelegramText(text).map((text) => ({ html: '', text }));
+        }
+        let ref;
+        async function send(chunk, html) {
             const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...target, text: chunk }),
+                body: JSON.stringify({ ...target, text: chunk, ...(html ? { parse_mode: 'HTML' } : {}) }),
                 signal: AbortSignal.timeout(10_000),
             });
             const result = await response.json();
+            // Retry only a definite formatting rejection, never ambiguous network errors,
+            // rate limits, or other API failures that could duplicate a delivered message.
+            if (html && response.status === 400 && isObject(result) && result.ok === false
+                && result.error_code === 400 && typeof result.description === 'string'
+                && /can(?:'|’)t parse entities|can't find end of|unsupported start tag|unclosed start tag|entity (?:offset|length)|entities (?:too long|are too long|are not allowed)|too many entities/i.test(result.description))
+                return false;
             if (!response.ok || !isObject(result) || result.ok !== true
                 || !isObject(result.result) || !Number.isSafeInteger(result.result.message_id)) {
                 throw new Error('Telegram rejected the reply');
             }
             ref = String(result.result.message_id);
+            return true;
         }
-        catch {
-            // Fetch errors can contain the token-bearing URL; never propagate them.
-            throw new Error('Telegram could not send the response');
+        for (const chunk of chunks) {
+            if (chunk.html && await send(chunk.html, true))
+                continue;
+            // URLs added to readable link labels can make the fallback longer than HTML's visible text.
+            for (const plain of splitTelegramText(chunk.text))
+                await send(plain, false);
         }
+        return ref;
     }
-    return ref;
+    catch {
+        // Fetch errors can contain the token-bearing URL; never propagate them.
+        throw new Error('Telegram could not send the response');
+    }
 }
