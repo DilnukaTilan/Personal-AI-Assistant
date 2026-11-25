@@ -1,0 +1,11 @@
+{"path":"/test/ai","expect":{"status":200,"body":"Hello from Trigger.dev!"}}
+{"method":"POST","path":"/__test/mode/failed","expect":{"status":200}}
+{"path":"/test/ai","expect":{"status":502,"body":{"error":"Trigger.dev AI task could not generate a response"}}}
+{"method":"POST","path":"/__test/mode/empty","expect":{"status":200}}
+{"path":"/test/ai","expect":{"status":502,"body":{"error":"Trigger.dev AI task could not generate a response"}}}
+{"method":"POST","path":"/__test/mode/unavailable","expect":{"status":200}}
+{"path":"/test/ai","expect":{"status":502,"body":{"error":"Trigger.dev AI task could not generate a response"}}}
+{"path":"/__test/trigger-count","expect":{"status":200,"body":{"triggered":4}}}
+{"method":"POST","path":"/__test/mode/unconfigured","expect":{"status":200}}
+{"path":"/test/ai","expect":{"status":503,"body":{"error":"Trigger.dev is not configured"}}}
+{"path":"/__test/trigger-count","expect":{"status":200,"body":{"triggered":4}}}

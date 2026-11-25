@@ -40,6 +40,32 @@ Registration sends the secret to Telegram and subscribes to new `message` update
 Send a text message to the bot in Telegram to receive an AI response. In groups,
 Telegram's bot privacy settings determine which messages the bot receives.
 
+## Temporary public AI test
+
+`GET /test/ai` needs no authentication and returns a generated greeting as
+`text/plain`. The Hono handler triggers the `test-ai` Trigger.dev task, waits
+for completion, and returns its output. The AI SDK call runs in Trigger.dev,
+using the same OpenAI model as the webhook. Responses include the run ID in
+`X-Trigger-Run-Id` and use `Cache-Control: no-store`.
+
+Set a production `TRIGGER_SECRET_KEY` in Railway and `OPENAI_API_KEY` in the
+Trigger.dev project's Production environment, then deploy the tasks with
+`npx trigger.dev@4.8.10 deploy --env prod`. For local testing, use a development
+key in `.env` and run `npm run dev:trigger` with the OpenAI key configured.
+The fixed prompt, 512-token cap, 15-second generation timeout, and disabled
+task/AI retries keep the test bounded. The handler waits up to 45 seconds for
+run updates; a timed-out request does not cancel the background run.
+
+```sh
+npx hono request /test/ai src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
+```
+
+Once deployed, open `/test/ai` on the server's public HTTPS domain. Each request
+starts a Trigger.dev run that calls OpenAI. Missing Trigger.dev configuration
+returns 503; task failures or empty output return 502; waiting too long returns
+504. Remove the marked route in `src/app.ts` and `src/trigger/test-ai.ts` after
+testing.
+
 ## Background tasks with Trigger.dev
 
 Trigger.dev project: `proj_cyhyvbhxmfhaqgtcuhui`.
@@ -65,8 +91,8 @@ entry point used by `npm start`.
 ## Verification without a server
 
 ```sh
-npx hono routes src/app.ts -e ai -e @ai-sdk/openai
-npx hono request / src/app.ts -e ai -e @ai-sdk/openai
+npx hono routes src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
+npx hono request / src/app.ts -e ai -e @ai-sdk/openai -e @trigger.dev/sdk
 npm test
 npm run build
 ```
